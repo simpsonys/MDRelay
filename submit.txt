@@ -1,0 +1,33 @@
+feat: add MD Relay Android MVP
+
+Implemented a lightweight Android viewer/relay app for AI-generated .md, .markdown, .txt, and .json files.
+
+Highlights:
+- Kotlin + Jetpack Compose single-activity app
+- Android file open/share intent handling
+- content:// and file:// Uri reading
+- auto-copy current file content on open
+- temporary Edit mode for relay-time corrections
+- Share/Copy current edited content
+- recent files
+- Markdown/TXT/JSON viewer
+- TOC and View-only full-screen
+- Korean filename handling
+- Fold/unfold state restore crash fix
+- selectable View-mode text
+- first-pass pipe table rendering
+- DevTool menu/build/install/run/screenshot/prompt workflow
+
+Validation:
+- .\DevToolMDRelay.ps1 build - success
+- .\DevToolMDRelay.ps1 lint - success
+- .\DevToolMDRelay.ps1 test - blocked by Gradle wrapper cache permission error in this sandbox
+- .\DevToolMDRelay.ps1 devices - success, one connected device found
+- .\DevToolMDRelay.ps1 install-run - success, built, installed, and launched on the connected device
+
+Known limitations:
+- save/write-back deferred
+- Mermaid diagram rendering deferred
+- true multiline table cells unsupported
+- full syntax highlighting deferred
+- header folding deferred
