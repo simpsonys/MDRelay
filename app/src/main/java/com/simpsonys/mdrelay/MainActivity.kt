@@ -8,7 +8,10 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.database.Cursor
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Parcelable
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -57,6 +60,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -90,10 +94,13 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.FileNotFoundException
 import java.nio.ByteBuffer
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
 import java.text.DateFormat
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
 
@@ -101,6 +108,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var fileResolver: FileUriResolver
     private lateinit var recentStore: RecentFileStore
     private lateinit var themeStore: ThemeStore
+    private lateinit var captureStore: CaptureStore
     private var incomingFile by mutableStateOf<OpenedFile?>(null)
     private var incomingText by mutableStateOf<SharedText?>(null)
 
@@ -109,6 +117,7 @@ class MainActivity : ComponentActivity() {
         fileResolver = FileUriResolver(this)
         recentStore = RecentFileStore(this)
         themeStore = ThemeStore(this)
+        captureStore = CaptureStore(this)
         if (savedInstanceState == null) {
             handleIntent(intent)
         }
@@ -120,6 +129,7 @@ class MainActivity : ComponentActivity() {
                 fileResolver = fileResolver,
                 recentStore = recentStore,
                 themeStore = themeStore,
+                captureStore = captureStore,
             )
         }
     }
@@ -140,24 +150,39 @@ class MainActivity : ComponentActivity() {
                 }
             }
             Intent.ACTION_SEND -> {
-                val stream = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                val stream = intent.parcelableExtraCompat(Intent.EXTRA_STREAM, Uri::class.java)
+                    ?: intent.clipData?.firstUriOrNull()
                 if (stream != null) {
+                    // TODO: Keep image/PDF bundle capture as a separate backlog item, not part of the outbox slice.
                     incomingFile = fileResolver.open(stream, intent.flags)
                     incomingText = null
                     if (incomingFile == null) toast(this, fileResolver.lastErrorMessage(stream))
                 } else {
                     val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
                     if (!text.isNullOrBlank()) {
+                        val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)
                         incomingText = SharedText(
-                            filename = intent.getStringExtra(Intent.EXTRA_SUBJECT)
-                                ?: "Shared text",
+                            filename = subject ?: "Shared text",
                             content = text,
+                            subject = subject,
+                            sourcePackage = extractShareSourcePackage(intent),
+                            sharedUrl = detectSharedUrl(text),
                         )
                         incomingFile = null
                     }
                 }
             }
         }
+    }
+
+    private fun extractShareSourcePackage(intent: Intent): String? {
+        val referrerHost = referrer?.host
+        if (!referrerHost.isNullOrBlank()) return referrerHost
+        val explicitReferrer = intent.getStringExtra(Intent.EXTRA_REFERRER_NAME)
+        if (!explicitReferrer.isNullOrBlank()) {
+            return explicitReferrer.removePrefix("android-app://")
+        }
+        return null
     }
 }
 
@@ -168,6 +193,7 @@ private fun MdRelayApp(
     fileResolver: FileUriResolver,
     recentStore: RecentFileStore,
     themeStore: ThemeStore,
+    captureStore: CaptureStore,
 ) {
     var darkTheme by rememberSaveable { mutableStateOf(themeStore.isDark()) }
     val colors = if (darkTheme) darkColorScheme() else lightColorScheme()
@@ -179,6 +205,7 @@ private fun MdRelayApp(
                 initialText = initialText,
                 fileResolver = fileResolver,
                 recentStore = recentStore,
+                captureStore = captureStore,
                 darkTheme = darkTheme,
                 onToggleTheme = {
                     darkTheme = !darkTheme
@@ -196,11 +223,13 @@ private fun AppRoot(
     initialText: SharedText?,
     fileResolver: FileUriResolver,
     recentStore: RecentFileStore,
+    captureStore: CaptureStore,
     darkTheme: Boolean,
     onToggleTheme: () -> Unit,
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val outboxWriter = remember(context) { MarkdownOutboxWriter(context) }
     var filename by rememberSaveable { mutableStateOf("MD Relay") }
     var currentUriString by rememberSaveable { mutableStateOf<String?>(null) }
     var reference by rememberSaveable { mutableStateOf("") }
@@ -211,9 +240,17 @@ private fun AppRoot(
     var showRecent by rememberSaveable { mutableStateOf(false) }
     var fullscreen by rememberSaveable { mutableStateOf(false) }
     var expandedFilename by rememberSaveable { mutableStateOf(false) }
+    var showCaptureSettings by rememberSaveable { mutableStateOf(false) }
+    var captureSubject by rememberSaveable { mutableStateOf<String?>(null) }
+    var captureSourcePackage by rememberSaveable { mutableStateOf<String?>(null) }
+    var captureSharedUrl by rememberSaveable { mutableStateOf<String?>(null) }
+    var saveStatusMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var saveInFlight by rememberSaveable { mutableStateOf(false) }
     var overflowOpen by remember { mutableStateOf(false) }
     val listState = remember { LazyListState() }
     val recentItems = remember { mutableStateOf(recentStore.load()) }
+    val captureSettings = remember { mutableStateOf(captureStore.loadSettings()) }
+    val captureDiagnostics = remember { mutableStateOf(captureStore.loadDiagnostics()) }
     val blocks = remember(rawContent, fileKind) {
         if (FileKind.valueOf(fileKind) == FileKind.MARKDOWN) parseMarkdownBlocks(rawContent) else emptyList()
     }
@@ -228,6 +265,10 @@ private fun AppRoot(
         showRecent = false
         showToc = false
         fullscreen = false
+        captureSubject = null
+        captureSourcePackage = null
+        captureSharedUrl = null
+        saveStatusMessage = null
     }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -238,12 +279,26 @@ private fun AppRoot(
                     opened = opened,
                     context = context,
                     recentStore = recentStore,
+                    permissionPersisted = fileResolver.lastPermissionPersisted(),
                     onRecentChanged = { recentItems.value = it },
                     onLoaded = { applyOpenedFile(opened) },
                 )
             } else {
                 toast(context, fileResolver.lastErrorMessage(uri))
             }
+        }
+    }
+    val outboxPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            val result = captureStore.persistOutboxUri(context, uri)
+            captureSettings.value = captureStore.loadSettings()
+            captureDiagnostics.value = captureStore.loadDiagnostics()
+            saveStatusMessage = if (result.isSuccess) {
+                "Outbox folder updated."
+            } else {
+                "Could not store outbox folder permission."
+            }
+            toast(context, saveStatusMessage.orEmpty())
         }
     }
 
@@ -264,9 +319,13 @@ private fun AppRoot(
                 reference = ""
                 rawContent = initialText.content
                 fileKind = FileKind.MARKDOWN.name
-                editMode = false
+                editMode = true
                 showRecent = false
                 fullscreen = false
+                captureSubject = initialText.subject
+                captureSourcePackage = initialText.sourcePackage
+                captureSharedUrl = initialText.sharedUrl ?: detectSharedUrl(initialText.content)
+                saveStatusMessage = null
             }
         }
     }
@@ -318,9 +377,12 @@ private fun AppRoot(
                         val uri = Uri.parse(item.uri)
                         val opened = fileResolver.open(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         if (opened != null) {
-                            loadOpenedFile(opened, context, recentStore, { recentItems.value = it }) {
-                                applyOpenedFile(opened)
-                            }
+                            loadOpenedFile(
+                                opened = opened,
+                                context = context,
+                                recentStore = recentStore,
+                                onRecentChanged = { recentItems.value = it },
+                            ) { applyOpenedFile(opened) }
                         } else {
                             toast(context, fileResolver.lastErrorMessage(uri))
                         }
@@ -366,8 +428,80 @@ private fun AppRoot(
                         showToc = false
                     },
                     onOpenFile = { filePicker.launch(arrayOf("text/markdown", "text/plain", "application/json", "application/octet-stream")) },
-                    onSave = { toast(context, "Save is not supported in MVP. Use Share or Copy.") },
+                    onSave = {
+                        coroutineScope.launch {
+                            if (saveInFlight) return@launch
+                            val settings = captureSettings.value
+                            if (settings.outboxTreeUri.isNullOrBlank()) {
+                                saveStatusMessage = "Select an outbox folder before saving."
+                                showCaptureSettings = true
+                                toast(context, saveStatusMessage.orEmpty())
+                                return@launch
+                            }
+                            saveInFlight = true
+                            val captureDraft = CaptureDraft(
+                                visibleTitle = filename,
+                                subject = captureSubject,
+                                sourcePackage = captureSourcePackage,
+                                sharedUrl = captureSharedUrl ?: detectSharedUrl(rawContent),
+                                capturedText = rawContent,
+                            )
+                            val saveResult = runCatching {
+                                outboxWriter.saveMarkdown(
+                                    outboxTreeUri = Uri.parse(settings.outboxTreeUri),
+                                    draft = captureDraft,
+                                )
+                            }
+                            val savedFile = saveResult.getOrNull()
+                            if (savedFile == null) {
+                                val message = saveResult.exceptionOrNull()?.message ?: "Unknown save error"
+                                captureStore.recordSaveFailure(message)
+                                captureDiagnostics.value = captureStore.loadDiagnostics()
+                                saveStatusMessage = "Local save failed.\n$message"
+                                toast(context, "Local save failed")
+                                saveInFlight = false
+                                return@launch
+                            }
+
+                            captureStore.recordSaveSuccess(savedFile)
+                            captureDiagnostics.value = captureStore.loadDiagnostics()
+                            currentUriString = savedFile.uri.toString()
+                            reference = savedFile.reference
+                            filename = savedFile.filename
+                            rawContent = savedFile.markdown
+                            fileKind = FileKind.MARKDOWN.name
+                            editMode = false
+
+                            val statusLines = mutableListOf(
+                                "Saved locally.",
+                                savedFile.filename,
+                            )
+                            if (settings.folderSyncEnabled && settings.triggerAfterSave) {
+                                kotlinx.coroutines.delay(settings.triggerDelaySeconds.coerceIn(1, 3) * 1_000L)
+                                val triggerResult = triggerFolderSync(context, settings.folderPairName)
+                                captureStore.recordTriggerResult(settings.folderPairName, triggerResult)
+                                captureDiagnostics.value = captureStore.loadDiagnostics()
+                                statusLines += "Legacy broadcast sent. Verify FolderSync Instant sync/schedule if upload does not start."
+                            } else {
+                                statusLines += "FolderSync: use Instant sync / Monitor device folder."
+                            }
+                            saveStatusMessage = statusLines.joinToString("\n")
+                            toast(context, "Saved locally")
+                            saveInFlight = false
+                        }
+                    },
+                    onShowCaptureSettings = {
+                        showCaptureSettings = true
+                    },
                 )
+
+                if (!saveStatusMessage.isNullOrBlank()) {
+                    StatusPanel(
+                        message = saveStatusMessage.orEmpty(),
+                        onDismiss = { saveStatusMessage = null },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
 
                 if (expandedFilename && filename.isNotBlank()) {
                     FileInfoPanel(
@@ -389,9 +523,12 @@ private fun AppRoot(
                             val uri = Uri.parse(item.uri)
                             val opened = fileResolver.open(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             if (opened != null) {
-                                loadOpenedFile(opened, context, recentStore, { recentItems.value = it }) {
-                                    applyOpenedFile(opened)
-                                }
+                                loadOpenedFile(
+                                    opened = opened,
+                                    context = context,
+                                    recentStore = recentStore,
+                                    onRecentChanged = { recentItems.value = it },
+                                ) { applyOpenedFile(opened) }
                             } else {
                                 toast(context, fileResolver.lastErrorMessage(uri))
                             }
@@ -404,17 +541,36 @@ private fun AppRoot(
                     )
                 }
 
-                if (rawContent.isBlank()) {
+                if (rawContent.isBlank() && !editMode) {
                     EmptyScreen(
                         recentItems = recentItems.value,
+                        outboxConfigured = !captureSettings.value.outboxTreeUri.isNullOrBlank(),
+                        onNewCapture = {
+                            filename = "MD Relay"
+                            rawContent = ""
+                            reference = ""
+                            currentUriString = null
+                            fileKind = FileKind.MARKDOWN.name
+                            editMode = true
+                            captureSubject = null
+                            captureSourcePackage = null
+                            captureSharedUrl = null
+                            saveStatusMessage = null
+                        },
+                        onConfigureCapture = {
+                            showCaptureSettings = true
+                        },
                         onOpen = { filePicker.launch(arrayOf("text/markdown", "text/plain", "application/json", "application/octet-stream")) },
                         onRecentClick = { item ->
                             val uri = Uri.parse(item.uri)
                             val opened = fileResolver.open(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             if (opened != null) {
-                                loadOpenedFile(opened, context, recentStore, { recentItems.value = it }) {
-                                    applyOpenedFile(opened)
-                                }
+                                loadOpenedFile(
+                                    opened = opened,
+                                    context = context,
+                                    recentStore = recentStore,
+                                    onRecentChanged = { recentItems.value = it },
+                                ) { applyOpenedFile(opened) }
                             } else {
                                 toast(context, fileResolver.lastErrorMessage(uri))
                             }
@@ -453,19 +609,61 @@ private fun AppRoot(
             )
         }
     }
+
+    if (showCaptureSettings) {
+        CaptureSettingsSheet(
+            settings = captureSettings.value,
+            diagnostics = captureDiagnostics.value,
+            onDismiss = { showCaptureSettings = false },
+            onSelectOutbox = { outboxPicker.launch(null) },
+            onOpenOutbox = {
+                val uriString = captureSettings.value.outboxTreeUri
+                if (uriString.isNullOrBlank()) {
+                    toast(context, "Select an outbox folder first")
+                } else if (!openDocumentTree(context, Uri.parse(uriString))) {
+                    toast(context, "Could not open outbox folder")
+                }
+            },
+            onFolderSyncEnabledChange = {
+                captureStore.updateSettings(captureSettings.value.copy(folderSyncEnabled = it))
+                captureSettings.value = captureStore.loadSettings()
+            },
+            onTriggerAfterSaveChange = {
+                captureStore.updateSettings(captureSettings.value.copy(triggerAfterSave = it))
+                captureSettings.value = captureStore.loadSettings()
+            },
+            onTriggerDelayChange = {
+                captureStore.updateSettings(captureSettings.value.copy(triggerDelaySeconds = it.coerceIn(1, 3)))
+                captureSettings.value = captureStore.loadSettings()
+            },
+            onFolderPairNameChange = {
+                captureStore.updateSettings(captureSettings.value.copy(folderPairName = it))
+                captureSettings.value = captureStore.loadSettings()
+            },
+            onTestFolderSync = {
+                val settings = captureSettings.value
+                val pairName = settings.folderPairName.ifBlank { DEFAULT_FOLDER_PAIR_NAME }
+                val result = triggerFolderSync(context, pairName)
+                captureStore.recordTriggerResult(pairName, result)
+                captureDiagnostics.value = captureStore.loadDiagnostics()
+                toast(context, result.message)
+            },
+        )
+    }
 }
 
 private fun loadOpenedFile(
     opened: OpenedFile,
     context: Context,
     recentStore: RecentFileStore,
+    permissionPersisted: Boolean = false,
     onRecentChanged: (List<RecentFile>) -> Unit,
     onLoaded: () -> Unit,
 ) {
     onLoaded()
     copyText(context, "MD Relay content", opened.content)
     toast(context, "Content copied")
-    recentStore.add(opened.toRecent())
+    recentStore.add(opened.toRecent(permissionPersisted))
     onRecentChanged(recentStore.load())
 }
 
@@ -490,6 +688,7 @@ private fun TopToolbar(
     onShowRecent: () -> Unit,
     onOpenFile: () -> Unit,
     onSave: () -> Unit,
+    onShowCaptureSettings: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -559,8 +758,16 @@ private fun TopToolbar(
                     },
                 )
                 DropdownMenuItem(
-                    text = { Text("Save deferred") },
-                    leadingIcon = { ToolbarIconImage(ToolbarIcon.Save, "Save deferred") },
+                    text = { Text("Capture settings") },
+                    leadingIcon = { ToolbarIconImage(ToolbarIcon.Settings, "Capture settings") },
+                    onClick = {
+                        onOverflowChange(false)
+                        onShowCaptureSettings()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text("Save to outbox") },
+                    leadingIcon = { ToolbarIconImage(ToolbarIcon.Save, "Save to outbox") },
                     onClick = {
                         onOverflowChange(false)
                         onSave()
@@ -647,13 +854,22 @@ private fun FileInfoPanel(
 @Composable
 private fun EmptyScreen(
     recentItems: List<RecentFile>,
+    outboxConfigured: Boolean,
+    onNewCapture: () -> Unit,
+    onConfigureCapture: () -> Unit,
     onOpen: () -> Unit,
     onRecentClick: (RecentFile) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Button(onClick = onNewCapture) {
+            Text("New capture")
+        }
         Button(onClick = onOpen) {
             Text("Open file")
+        }
+        TextButton(onClick = onConfigureCapture) {
+            Text(if (outboxConfigured) "Outbox configured" else "Configure outbox")
         }
         Text("Recent opened", style = MaterialTheme.typography.titleMedium)
         RecentPanel(
@@ -662,6 +878,168 @@ private fun EmptyScreen(
             onLongPress = {},
             modifier = Modifier.fillMaxSize(),
         )
+    }
+}
+
+@Composable
+private fun StatusPanel(
+    message: String,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(6.dp))
+            .padding(start = 10.dp, top = 6.dp, end = 4.dp, bottom = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Capture status",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onDismiss, modifier = Modifier.height(28.dp)) {
+                Text("×", style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        Text(message, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 2.dp))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CaptureSettingsSheet(
+    settings: CaptureSettings,
+    diagnostics: CaptureDiagnostics,
+    onDismiss: () -> Unit,
+    onSelectOutbox: () -> Unit,
+    onOpenOutbox: () -> Unit,
+    onFolderSyncEnabledChange: (Boolean) -> Unit,
+    onTriggerAfterSaveChange: (Boolean) -> Unit,
+    onTriggerDelayChange: (Int) -> Unit,
+    onFolderPairNameChange: (String) -> Unit,
+    onTestFolderSync: () -> Unit,
+) {
+    var folderPairName by remember(settings.folderPairName) { mutableStateOf(settings.folderPairName) }
+    var triggerDelayText by remember(settings.triggerDelaySeconds) { mutableStateOf(settings.triggerDelaySeconds.toString()) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.9f)
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text("Capture settings", style = MaterialTheme.typography.titleMedium)
+            Text("Capture output mode: Local outbox", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                text = "Outbox folder: ${settings.outboxTreeUri ?: "Not selected"}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onSelectOutbox) {
+                    Text("Select folder")
+                }
+                TextButton(onClick = onOpenOutbox) {
+                    Text("Open outbox")
+                }
+            }
+            Text(
+                text = "Last successful write: ${diagnostics.lastSavedAt?.let(::formatTime) ?: "None"}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Enable legacy broadcast trigger", style = MaterialTheme.typography.bodyMedium)
+                    Text("Optional best-effort broadcast. Recommended: use FolderSync Instant sync / Monitor device folder.", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(
+                    checked = settings.folderSyncEnabled,
+                    onCheckedChange = onFolderSyncEnabledChange,
+                )
+            }
+
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Send legacy broadcast after save", style = MaterialTheme.typography.bodyMedium)
+                    Text("Best-effort only. Some Android/FolderSync versions may ignore it.", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(
+                    checked = settings.triggerAfterSave,
+                    onCheckedChange = onTriggerAfterSaveChange,
+                )
+            }
+
+            OutlinedTextField(
+                value = folderPairName,
+                onValueChange = {
+                    folderPairName = it
+                    onFolderPairNameChange(it)
+                },
+                label = { Text("FolderPair name") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+
+            OutlinedTextField(
+                value = triggerDelayText,
+                onValueChange = {
+                    val digits = it.filter(Char::isDigit).take(1)
+                    val parsed = digits.toIntOrNull()?.coerceIn(1, 3)
+                    triggerDelayText = parsed?.toString() ?: digits
+                    if (parsed != null) onTriggerDelayChange(parsed)
+                },
+                label = { Text("Trigger delay seconds (1-3)") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+
+            Text(
+                text = "Recommended FolderSync setup:\n" +
+                    "• Enable Instant sync / Monitor device folder for the MDRelay outbox folder.\n" +
+                    "• FolderPair: $DEFAULT_FOLDER_PAIR_NAME\n" +
+                    "• Direction: To remote folder\n" +
+                    "• Remote: Google Drive/YSDAWAY-LLM-Wiki/inbox/mobile/\n" +
+                    "• Sync deletions: OFF\n\n" +
+                    "Legacy broadcast trigger is optional and best-effort only. Some Android/FolderSync versions may ignore it.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            TextButton(onClick = onTestFolderSync) {
+                Text("Test legacy broadcast trigger")
+            }
+
+            Text("Diagnostics", style = MaterialTheme.typography.titleSmall)
+            DiagnosticLine("Last saved file", diagnostics.lastSavedFile ?: "None")
+            DiagnosticLine("Last saved at", diagnostics.lastSavedAt?.let(::formatTime) ?: "None")
+            DiagnosticLine("Last outbox URI/path", diagnostics.lastOutboxUri ?: "None")
+            DiagnosticLine("Last FolderSync trigger at", diagnostics.lastTriggerAt?.let(::formatTime) ?: "None")
+            DiagnosticLine("Last FolderSync folderPair", diagnostics.lastTriggerFolderPair ?: "None")
+            DiagnosticLine("Last error", diagnostics.lastError ?: "None")
+            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                Text("Close")
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticLine(label: String, value: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        SelectionContainer {
+            Text(value, style = MaterialTheme.typography.bodySmall)
+        }
     }
 }
 
@@ -1292,6 +1670,7 @@ private enum class ToolbarIcon(val resId: Int) {
     LightMode(R.drawable.ic_light_mode),
     History(R.drawable.ic_history),
     FolderOpen(R.drawable.ic_folder_open),
+    Settings(R.drawable.ic_settings),
     Save(R.drawable.ic_save),
 }
 
@@ -1309,12 +1688,48 @@ private data class OpenedFile(
     val content: String,
     val kind: FileKind,
 ) {
-    fun toRecent(): RecentFile = RecentFile(uri, filename, reference, System.currentTimeMillis())
+    fun toRecent(permissionPersisted: Boolean = false): RecentFile =
+        RecentFile(uri, filename, reference, System.currentTimeMillis(), permissionPersisted)
 }
 
 private data class SharedText(
     val filename: String,
     val content: String,
+    val subject: String?,
+    val sourcePackage: String?,
+    val sharedUrl: String?,
+)
+
+private data class CaptureDraft(
+    val visibleTitle: String,
+    val subject: String?,
+    val sourcePackage: String?,
+    val sharedUrl: String?,
+    val capturedText: String,
+)
+
+private data class SavedCaptureFile(
+    val uri: Uri,
+    val filename: String,
+    val reference: String,
+    val markdown: String,
+)
+
+private data class CaptureSettings(
+    val outboxTreeUri: String? = null,
+    val folderSyncEnabled: Boolean = true,
+    val triggerAfterSave: Boolean = false,
+    val triggerDelaySeconds: Int = 2,
+    val folderPairName: String = DEFAULT_FOLDER_PAIR_NAME,
+)
+
+private data class CaptureDiagnostics(
+    val lastSavedFile: String? = null,
+    val lastSavedAt: Long? = null,
+    val lastOutboxUri: String? = null,
+    val lastTriggerAt: Long? = null,
+    val lastTriggerFolderPair: String? = null,
+    val lastError: String? = null,
 )
 
 private data class RecentFile(
@@ -1322,6 +1737,7 @@ private data class RecentFile(
     val filename: String,
     val reference: String,
     val lastOpened: Long,
+    val permissionPersisted: Boolean = false,
 )
 
 private enum class MarkdownBlockType {
@@ -1363,6 +1779,9 @@ private data class TocItem(
 
 private class FileUriResolver(private val activity: Activity) {
     private var lastError: String? = null
+    private var _lastPermissionPersisted = false
+
+    fun lastPermissionPersisted() = _lastPermissionPersisted
 
     fun open(uri: Uri, flags: Int): OpenedFile? {
         lastError = null
@@ -1379,20 +1798,28 @@ private class FileUriResolver(private val activity: Activity) {
                 content = content,
                 kind = detectKind(filename, content),
             )
-        }.onFailure {
-            lastError = it.message ?: it.javaClass.simpleName
+        }.onFailure { e ->
+            lastError = when (e) {
+                is SecurityException -> "File permission expired. Please open the file again."
+                else -> e.message ?: e.javaClass.simpleName
+            }
         }.getOrNull()
     }
 
     fun lastErrorMessage(uri: Uri): String {
+        val permissionExpiredMsg = "File permission expired. Please open the file again."
+        if (lastError == permissionExpiredMsg) return permissionExpiredMsg
         val name = displayName(uri)
         return "Could not open $name" + lastError?.let { ": $it" }.orEmpty()
     }
 
     private fun persistPermission(uri: Uri, flags: Int) {
         val takeFlags = flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        _lastPermissionPersisted = false
         if (takeFlags != 0) {
-            runCatching { activity.contentResolver.takePersistableUriPermission(uri, takeFlags) }
+            _lastPermissionPersisted = runCatching {
+                activity.contentResolver.takePersistableUriPermission(uri, takeFlags)
+            }.isSuccess
         }
     }
 
@@ -1458,6 +1885,7 @@ private class RecentFileStore(context: Context) {
                     filename = obj.getString("filename"),
                     reference = obj.getString("reference"),
                     lastOpened = obj.getLong("lastOpened"),
+                    permissionPersisted = obj.optBoolean("permissionPersisted", false),
                 )
             }
         }.getOrDefault(emptyList())
@@ -1472,6 +1900,7 @@ private class RecentFileStore(context: Context) {
                 put("filename", it.filename)
                 put("reference", it.reference)
                 put("lastOpened", it.lastOpened)
+                put("permissionPersisted", it.permissionPersisted)
             })
         }
         prefs.edit().putString("items", array.toString()).apply()
@@ -1487,3 +1916,280 @@ private class ThemeStore(context: Context) {
         prefs.edit().putBoolean("dark", dark).apply()
     }
 }
+
+private class CaptureStore(context: Context) {
+    private val prefs = context.getSharedPreferences("capture_settings", Context.MODE_PRIVATE)
+
+    fun loadSettings(): CaptureSettings = CaptureSettings(
+        outboxTreeUri = prefs.getString(KEY_OUTBOX_TREE_URI, null),
+        folderSyncEnabled = prefs.getBoolean(KEY_FOLDER_SYNC_ENABLED, true),
+        triggerAfterSave = prefs.getBoolean(KEY_TRIGGER_AFTER_SAVE, false),
+        triggerDelaySeconds = prefs.getInt(KEY_TRIGGER_DELAY_SECONDS, 2).coerceIn(1, 3),
+        folderPairName = prefs.getString(KEY_FOLDER_PAIR_NAME, DEFAULT_FOLDER_PAIR_NAME) ?: DEFAULT_FOLDER_PAIR_NAME,
+    )
+
+    fun updateSettings(settings: CaptureSettings) {
+        prefs.edit()
+            .putString(KEY_OUTBOX_TREE_URI, settings.outboxTreeUri)
+            .putBoolean(KEY_FOLDER_SYNC_ENABLED, settings.folderSyncEnabled)
+            .putBoolean(KEY_TRIGGER_AFTER_SAVE, settings.triggerAfterSave)
+            .putInt(KEY_TRIGGER_DELAY_SECONDS, settings.triggerDelaySeconds.coerceIn(1, 3))
+            .putString(KEY_FOLDER_PAIR_NAME, settings.folderPairName.ifBlank { DEFAULT_FOLDER_PAIR_NAME })
+            .apply()
+    }
+
+    fun persistOutboxUri(context: Context, uri: Uri): Result<Unit> {
+        return runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+            updateSettings(loadSettings().copy(outboxTreeUri = uri.toString()))
+            prefs.edit().putString(KEY_LAST_OUTBOX_URI, uri.toString()).apply()
+        }.onFailure {
+            recordSaveFailure(it.message ?: "Could not persist outbox permission")
+        }
+    }
+
+    fun loadDiagnostics(): CaptureDiagnostics = CaptureDiagnostics(
+        lastSavedFile = prefs.getString(KEY_LAST_SAVED_FILE, null),
+        lastSavedAt = prefs.getLong(KEY_LAST_SAVED_AT, 0L).takeIf { it > 0L },
+        lastOutboxUri = prefs.getString(KEY_LAST_OUTBOX_URI, null),
+        lastTriggerAt = prefs.getLong(KEY_LAST_TRIGGER_AT, 0L).takeIf { it > 0L },
+        lastTriggerFolderPair = prefs.getString(KEY_LAST_TRIGGER_FOLDER_PAIR, null),
+        lastError = prefs.getString(KEY_LAST_ERROR, null),
+    )
+
+    fun recordSaveSuccess(savedFile: SavedCaptureFile) {
+        prefs.edit()
+            .putString(KEY_LAST_SAVED_FILE, savedFile.filename)
+            .putLong(KEY_LAST_SAVED_AT, System.currentTimeMillis())
+            .putString(KEY_LAST_OUTBOX_URI, savedFile.reference)
+            .remove(KEY_LAST_ERROR)
+            .apply()
+    }
+
+    fun recordSaveFailure(message: String) {
+        prefs.edit().putString(KEY_LAST_ERROR, message).apply()
+    }
+
+    fun recordTriggerResult(folderPairName: String, result: FolderSyncTriggerResult) {
+        val editor = prefs.edit()
+            .putString(KEY_LAST_TRIGGER_FOLDER_PAIR, folderPairName)
+        if (result.sent) {
+            editor.putLong(KEY_LAST_TRIGGER_AT, System.currentTimeMillis())
+        } else {
+            editor.putString(KEY_LAST_ERROR, result.message)
+        }
+        editor.apply()
+    }
+
+    private companion object {
+        const val KEY_OUTBOX_TREE_URI = "outbox_tree_uri"
+        const val KEY_FOLDER_SYNC_ENABLED = "folder_sync_enabled"
+        const val KEY_TRIGGER_AFTER_SAVE = "trigger_after_save"
+        const val KEY_TRIGGER_DELAY_SECONDS = "trigger_delay_seconds"
+        const val KEY_FOLDER_PAIR_NAME = "folder_pair_name"
+        const val KEY_LAST_SAVED_FILE = "last_saved_file"
+        const val KEY_LAST_SAVED_AT = "last_saved_at"
+        const val KEY_LAST_OUTBOX_URI = "last_outbox_uri"
+        const val KEY_LAST_TRIGGER_AT = "last_trigger_at"
+        const val KEY_LAST_TRIGGER_FOLDER_PAIR = "last_trigger_folder_pair"
+        const val KEY_LAST_ERROR = "last_error"
+    }
+}
+
+private class MarkdownOutboxWriter(private val context: Context) {
+    fun saveMarkdown(outboxTreeUri: Uri, draft: CaptureDraft): SavedCaptureFile {
+        val timestamp = ZonedDateTime.now()
+        val markdown = buildCaptureMarkdown(draft, timestamp)
+        val baseName = buildCaptureFilename(timestamp, draft.subject ?: draft.visibleTitle)
+        val filename = createUniqueFilename(outboxTreeUri, baseName)
+        val targetUri = createDocument(outboxTreeUri, filename)
+        context.contentResolver.openOutputStream(targetUri, "wt")?.bufferedWriter(Charsets.UTF_8)?.use { writer ->
+            writer.write(markdown)
+        } ?: throw FileNotFoundException("Could not open outbox output stream")
+        return SavedCaptureFile(
+            uri = targetUri,
+            filename = filename,
+            reference = targetUri.toString(),
+            markdown = markdown,
+        )
+    }
+
+    private fun createUniqueFilename(outboxTreeUri: Uri, baseName: String): String {
+        val existingNames = queryChildDisplayNames(context, outboxTreeUri)
+        if (baseName !in existingNames) return baseName
+        val stem = baseName.removeSuffix(".md")
+        var index = 2
+        while (true) {
+            val candidate = "$stem-${index.toString().padStart(2, '0')}.md"
+            if (candidate !in existingNames) return candidate
+            index++
+        }
+    }
+
+    private fun createDocument(outboxTreeUri: Uri, filename: String): Uri {
+        val treeDocumentUri = DocumentsContract.buildDocumentUriUsingTree(
+            outboxTreeUri,
+            DocumentsContract.getTreeDocumentId(outboxTreeUri),
+        )
+        return DocumentsContract.createDocument(
+            context.contentResolver,
+            treeDocumentUri,
+            "text/markdown",
+            filename,
+        ) ?: error("Could not create $filename in outbox")
+    }
+}
+
+private data class FolderSyncTriggerResult(
+    val sent: Boolean,
+    val message: String,
+)
+
+private fun triggerFolderSync(context: Context, folderPairName: String): FolderSyncTriggerResult {
+    val normalizedName = folderPairName.trim()
+    if (normalizedName.isBlank()) {
+        return FolderSyncTriggerResult(sent = false, message = "FolderSync trigger not sent: folderPair name is empty.")
+    }
+    // Send to all candidate packages. Broadcasts to non-installed packages are silently ignored by
+    // the OS, so this is safe without package-visibility checks. The <queries> block in the manifest
+    // handles detection when we need it; here we always send.
+    for (pkg in FOLDERSYNC_PACKAGES) {
+        context.sendBroadcast(
+            Intent(FOLDERSYNC_ACTION_SYNC).apply {
+                setPackage(pkg)
+                putExtra(FOLDERSYNC_EXTRA_FOLDERPAIR, normalizedName)
+            },
+        )
+    }
+    return FolderSyncTriggerResult(
+        sent = true,
+        message = "FolderSync trigger sent to ${FOLDERSYNC_PACKAGES.size} candidate package(s). FolderPair: \"$normalizedName\"",
+    )
+}
+
+private fun queryChildDisplayNames(context: Context, treeUri: Uri): Set<String> {
+    val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+        treeUri,
+        DocumentsContract.getTreeDocumentId(treeUri),
+    )
+    val names = linkedSetOf<String>()
+    context.contentResolver.query(
+        childrenUri,
+        arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+        null,
+        null,
+        null,
+    )?.use { cursor ->
+        while (cursor.moveToNext()) {
+            cursor.getString(0)?.let(names::add)
+        }
+    }
+    return names
+}
+
+private fun openDocumentTree(context: Context, treeUri: Uri): Boolean {
+    val treeDocumentUri = DocumentsContract.buildDocumentUriUsingTree(
+        treeUri,
+        DocumentsContract.getTreeDocumentId(treeUri),
+    )
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(treeDocumentUri, DocumentsContract.Document.MIME_TYPE_DIR)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+    }
+    return runCatching {
+        context.startActivity(intent)
+    }.isSuccess
+}
+
+private fun buildCaptureFilename(timestamp: ZonedDateTime, titleCandidate: String?): String {
+    val base = timestamp.format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmm"))
+    val suffix = sanitizeFilenameSegment(titleCandidate)
+    return if (suffix.isNullOrBlank()) {
+        "${base}_mobile-capture.md"
+    } else {
+        "${base}_${suffix}.md"
+    }
+}
+
+private fun sanitizeFilenameSegment(value: String?): String? {
+    if (value.isNullOrBlank()) return null
+    // Strip trailing .md extensions (handles .md, .md.md, etc.) before further processing.
+    val withoutMd = value.replace(Regex("""(\.md)+$""", RegexOption.IGNORE_CASE), "")
+    // If the value looks like a previously-generated capture filename (YYYY-MM-DD_HHmm_<rest>),
+    // strip the timestamp prefix so we don't embed old filenames into new ones.
+    val withoutTimestampPrefix = withoutMd.replace(Regex("""^\d{4}-\d{2}-\d{2}_\d{4}_"""), "")
+    val cleaned = withoutTimestampPrefix
+        .substringBefore('\n')
+        .substringBefore('?')
+        .replace(Regex("""[\\/:*?"<>|\p{Cntrl}]"""), "-")
+        .replace(Regex("""\s+"""), "-")
+        .replace(Regex("-{2,}"), "-")
+        .trim('-', '_', '.')
+        .take(40)
+    return cleaned.takeIf {
+        it.isNotBlank() && it.lowercase(Locale.ROOT) !in setOf("md-relay", "shared-text", "mobile-capture")
+    }
+}
+
+private fun buildCaptureMarkdown(draft: CaptureDraft, timestamp: ZonedDateTime): String {
+    val sharedUrl = draft.sharedUrl
+    val sourcePackage = draft.sourcePackage
+    return buildString {
+        appendLine("---")
+        appendLine("type: mobile-capture")
+        appendLine("source_app: MDRelay")
+        appendLine("source_status: raw")
+        appendLine("review_status: draft")
+        appendLine("sensitivity: personal")
+        appendLine("mobile_sync: false")
+        appendLine("created: ${timestamp.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)}")
+        appendLine("---")
+        appendLine()
+        appendLine("## Ingest Intent")
+        appendLine()
+        appendLine("- Why did I save this?")
+        appendLine("- Which life/project/investment decision may this affect?")
+        appendLine("- Temporary reference or durable knowledge?")
+        appendLine("- Should this become wiki, decision, glossary, roadmap, or archive?")
+        appendLine()
+        if (sharedUrl != null || sourcePackage != null) {
+            appendLine("## Source")
+            appendLine()
+            if (sharedUrl != null) appendLine("- URL: $sharedUrl")
+            if (sourcePackage != null) appendLine("- Shared from: $sourcePackage")
+            appendLine()
+        }
+        appendLine("## Capture")
+        appendLine()
+        appendLine(draft.capturedText.ifBlank { "(empty capture)" })
+    }.trimEnd()
+}
+
+private fun detectSharedUrl(text: String): String? {
+    val match = Regex("""https?://\S+""").find(text) ?: return null
+    return match.value.trimEnd(')', ']', '}', '.', ',')
+}
+
+private fun ClipData.firstUriOrNull(): Uri? {
+    return if (itemCount > 0) getItemAt(0)?.uri else null
+}
+
+private fun <T : Parcelable> Intent.parcelableExtraCompat(name: String, clazz: Class<T>): T? {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        getParcelableExtra(name, clazz)
+    } else {
+        @Suppress("DEPRECATION")
+        getParcelableExtra(name) as? T
+    }
+}
+
+private const val DEFAULT_FOLDER_PAIR_NAME = "YSDAWAY_MDRelay_Outbox_to_Drive"
+private const val FOLDERSYNC_ACTION_SYNC = "com.tacit.foldersync.action.SYNC"
+private const val FOLDERSYNC_EXTRA_FOLDERPAIR = "folderpair"
+private val FOLDERSYNC_PACKAGES = listOf(
+    "dk.tacit.android.foldersync.full",
+    "dk.tacit.android.foldersync.lite",
+)
