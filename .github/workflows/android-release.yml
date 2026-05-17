@@ -1,0 +1,96 @@
+name: Android Release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to attach the APK to (e.g. v0.2.0_260517)"
+        required: true
+        default: "v0.2.0_260517"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ github.event.inputs.release_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: gradle
+
+      - name: Make gradlew executable
+        run: chmod +x ./gradlew
+
+      - name: Decode keystore
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          echo "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/mdrelay-release.jks"
+
+      - name: Build signed release APK
+        env:
+          CI_RELEASE_SIGNING: "true"
+          ANDROID_KEYSTORE_FILE: "${{ runner.temp }}/mdrelay-release.jks"
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: ./gradlew clean assembleRelease
+
+      - name: Prepare dist artifact
+        run: |
+          mkdir -p dist
+          RELEASE_TAG="${{ steps.tag.outputs.value }}"
+          cp app/build/outputs/apk/release/app-release.apk "dist/MDRelay-${RELEASE_TAG}-release.apk"
+
+      - name: Verify APK signature
+        run: |
+          RELEASE_TAG="${{ steps.tag.outputs.value }}"
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)"
+          if [ -n "$APKSIGNER" ]; then
+            "$APKSIGNER" verify --verbose --print-certs "dist/MDRelay-${RELEASE_TAG}-release.apk"
+          else
+            echo "apksigner not found, skipping verification"
+          fi
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MDRelay-${{ steps.tag.outputs.value }}-release
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RELEASE_TAG="${{ steps.tag.outputs.value }}"
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            echo "Release $RELEASE_TAG exists — uploading APK"
+            gh release upload "$RELEASE_TAG" dist/*.apk --clobber
+          else
+            echo "Creating release $RELEASE_TAG"
+            gh release create "$RELEASE_TAG" dist/*.apk \
+              --title "$RELEASE_TAG" \
+              --generate-notes
+          fi

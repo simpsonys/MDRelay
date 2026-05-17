@@ -32,6 +32,37 @@ Use **Save to outbox** (⋮ menu) to write a Markdown capture to a local folder.
 - FolderSync raw broadcast trigger is legacy/best-effort. Reliable upload requires FolderSync Instant sync / Monitor device folder watching the outbox.
 - Google Drive upload is FolderSync's responsibility, not MDRelay's.
 
+## Release APK
+
+Signed release APKs are built automatically by GitHub Actions.
+
+**Required repository secrets** (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|---|---|
+| `ANDROID_RELEASE_KEYSTORE_BASE64` | Base64-encoded `.jks` keystore file |
+| `ANDROID_RELEASE_STORE_PASSWORD` | Keystore password |
+| `ANDROID_RELEASE_KEY_ALIAS` | Key alias (e.g. `mdrelay-release`) |
+| `ANDROID_RELEASE_KEY_PASSWORD` | Key password |
+
+**One-time keystore setup** (run locally, store outside the repo):
+
+```powershell
+keytool -genkeypair -v -keystore D:\Secure\MDRelay\mdrelay-release.jks `
+  -alias mdrelay-release -keyalg RSA -keysize 2048 -validity 10000
+
+# Encode for GitHub secret:
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("D:\Secure\MDRelay\mdrelay-release.jks")) | Set-Clipboard
+```
+
+**To produce a release APK:**
+1. Push a tag matching `v*` (triggers automatically), or
+2. Go to Actions → Android Release APK → Run workflow → enter `release_tag`.
+
+The generated asset name follows: `MDRelay-<tag>-release.apk`
+
+> **Never commit the release keystore or passwords.** The `.gitignore` already excludes `*.jks`, `*.keystore`, and `signing.properties`.
+
 ## FolderSync Setup
 
 MDRelay writes Markdown files to a local outbox folder. FolderSync watches that folder and uploads files to Google Drive.

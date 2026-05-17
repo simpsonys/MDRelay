@@ -4,6 +4,15 @@ plugins {
     id 'org.jetbrains.kotlin.plugin.compose'
 }
 
+// CI release signing — activated only when CI_RELEASE_SIGNING=true env var is set.
+// All four ANDROID_* env vars must be present in that mode; Gradle fails early otherwise.
+// Local debug builds are completely unaffected.
+def ciReleaseSigning = System.getenv('CI_RELEASE_SIGNING') == 'true'
+def releaseKeystoreFile     = System.getenv('ANDROID_KEYSTORE_FILE')
+def releaseKeystorePassword = System.getenv('ANDROID_KEYSTORE_PASSWORD')
+def releaseKeyAlias         = System.getenv('ANDROID_KEY_ALIAS')
+def releaseKeyPassword      = System.getenv('ANDROID_KEY_PASSWORD')
+
 android {
     namespace 'com.simpsonys.mdrelay'
     compileSdk 35
@@ -12,12 +21,36 @@ android {
         applicationId 'com.simpsonys.mdrelay'
         minSdk 26
         targetSdk 35
-        versionCode 1
-        versionName '0.1.0'
+        versionCode 2
+        versionName '0.2.0'
+    }
+
+    signingConfigs {
+        release {
+            if (ciReleaseSigning) {
+                def missing = []
+                if (!releaseKeystoreFile)     missing << 'ANDROID_KEYSTORE_FILE'
+                if (!releaseKeystorePassword) missing << 'ANDROID_KEYSTORE_PASSWORD'
+                if (!releaseKeyAlias)         missing << 'ANDROID_KEY_ALIAS'
+                if (!releaseKeyPassword)      missing << 'ANDROID_KEY_PASSWORD'
+                if (!missing.isEmpty()) {
+                    throw new GradleException(
+                        "CI_RELEASE_SIGNING=true but missing env vars: ${missing.join(', ')}"
+                    )
+                }
+                storeFile     file(releaseKeystoreFile)
+                storePassword releaseKeystorePassword
+                keyAlias      releaseKeyAlias
+                keyPassword   releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
+            if (ciReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }

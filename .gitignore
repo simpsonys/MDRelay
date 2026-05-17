@@ -47,3 +47,9 @@ Screenshot_*.png
 *.p12
 *.pem
 *.key
+release-keystore.properties
+signing.properties
+
+# Release output staging
+/dist/
+/release/
