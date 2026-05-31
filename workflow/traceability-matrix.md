@@ -15,3 +15,5 @@
 | **자동 빌드 정합 검사 및 보존** | - | `ADR-001` §CI | `Maintainability` | [android-ci.yml](file:///d:/Project/MDRelay/.github/workflows/android-ci.yml) | `Active` |
 | **URL 감지 검증 (`detectSharedUrl`)** | - | `ADR-002` §Utility | `Testability & Observability` | [UtilityTest.kt](file:///d:/Project/MDRelay/app/src/test/java/com/simpsonys/mdrelay/UtilityTest.kt) §testDetectSharedUrl | `Active` |
 | **파일명 정제 검증 (`sanitizeFilenameSegment`)** | - | `ADR-002` §Utility | `Data Safety & Testability` | [UtilityTest.kt](file:///d:/Project/MDRelay/app/src/test/java/com/simpsonys/mdrelay/UtilityTest.kt) §testSanitizeFilenameSegment | `Active` |
+| **원격 Gist 딥링크 열기 (`mdrelay://web-open`)** | - | `ADR-003` §WebOpen | `Data Safety & Privacy` | [manual-test-checklist.md](file:///d:/Project/MDRelay/qa/manual-test-checklist.md) §2 | `Active` |
+| **원격 파일명 파싱 검증 (`extractFilenameFromUrl`)** | - | `ADR-003` §WebOpen | `Testability & Data Safety` | [UtilityTest.kt](file:///d:/Project/MDRelay/app/src/test/java/com/simpsonys/mdrelay/UtilityTest.kt) §testExtractFilenameFromUrl | `Active` |

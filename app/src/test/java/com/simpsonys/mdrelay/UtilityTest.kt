@@ -90,4 +90,26 @@ class UtilityTest {
         assertNull(sanitizeFilenameSegment("   "))
         assertNull(sanitizeFilenameSegment(null))
     }
+
+    @Test
+    fun testExtractFilenameFromUrl_simpleUrl() {
+        val url = "https://example.com/notes/weekly-report.md"
+        val filename = extractFilenameFromUrl(url)
+        assertEquals("weekly-report.md", filename)
+    }
+
+    @Test
+    fun testExtractFilenameFromUrl_userGistUrlWithQueryParams() {
+        val url = "https://gist.githubusercontent.com/simpsonys/7bc1e71327a966e644c5f2a28597f199/raw/acbc5de7e430206c85ebfeadcb4d5b736c58b2e7/SIMPSONYS_FINANCE_Afternoon_2026-05-31.md?response-content-disposition=attachment?"
+        val filename = extractFilenameFromUrl(url)
+        assertEquals("SIMPSONYS_FINANCE_Afternoon_2026-05-31.md", filename)
+    }
+
+    @Test
+    fun testExtractFilenameFromUrl_fallbackWhenReservedOrEmpty() {
+        // "md-relay" is a reserved word and sanitized to null
+        val url = "https://example.com/files/md-relay"
+        val filename = extractFilenameFromUrl(url)
+        assertEquals("web-capture.md", filename)
+    }
 }

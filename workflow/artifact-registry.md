@@ -13,6 +13,7 @@
 | `ADR-000` | [adr-000-existing-architecture-baseline.md](file:///d:/Project/MDRelay/arch/adr-000-existing-architecture-baseline.md) | `Accepted` | Existing Architecture Baseline | 2026-05-31 | 현존 MDRelay 핵심 아키텍처 및 제약 명시 |
 | `ADR-001` | [adr-001-automatic-ci-and-retention.md](file:///d:/Project/MDRelay/arch/adr-001-automatic-ci-and-retention.md) | `Accepted` | Automatic CI and Artifact Retention | 2026-05-31 | 무서명 디버그 빌드 검증 및 3일 보존 자동화 |
 | `ADR-002` | [adr-002-unit-test-infrastructure.md](file:///d:/Project/MDRelay/arch/adr-002-unit-test-infrastructure.md) | `Accepted` | Unit Test Infrastructure | 2026-05-31 | JUnit 4 테스트 환경 마련 및 가시성 완화 |
+| `ADR-003` | [adr-003-web-url-intake-scheme.md](file:///d:/Project/MDRelay/arch/adr-003-web-url-intake-scheme.md) | `Accepted` | Deep Link Web Open Scheme | 2026-05-31 | 원격 딥링크 스키마 인입 및 다운로드 설계안 |
 
 ---
 

@@ -92,6 +92,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.FileNotFoundException
@@ -144,9 +147,13 @@ class MainActivity : ComponentActivity() {
         when (intent?.action) {
             Intent.ACTION_VIEW -> {
                 intent.data?.let { uri ->
-                    incomingFile = fileResolver.open(uri, intent.flags)
-                    incomingText = null
-                    if (incomingFile == null) toast(this, fileResolver.lastErrorMessage(uri))
+                    if (uri.scheme == "mdrelay" && uri.host == "web-open") {
+                        handleDeepLinkWebOpen(uri)
+                    } else {
+                        incomingFile = fileResolver.open(uri, intent.flags)
+                        incomingText = null
+                        if (incomingFile == null) toast(this, fileResolver.lastErrorMessage(uri))
+                    }
                 }
             }
             Intent.ACTION_SEND -> {
@@ -171,6 +178,38 @@ class MainActivity : ComponentActivity() {
                         incomingFile = null
                     }
                 }
+            }
+        }
+    }
+
+    private fun handleDeepLinkWebOpen(uri: Uri) {
+        val targetUrlString = uri.getQueryParameter("url")
+        if (targetUrlString.isNullOrBlank()) {
+            toast(this, "Deep link error: URL parameter is missing")
+            return
+        }
+        val decodedUrlString = runCatching { java.net.URLDecoder.decode(targetUrlString, "UTF-8") }.getOrNull() ?: targetUrlString
+
+        CoroutineScope(Dispatchers.Main).launch {
+            val progressToast = Toast.makeText(this@MainActivity, "Downloading remote file...", Toast.LENGTH_SHORT)
+            progressToast.show()
+            val result = withContext(Dispatchers.IO) {
+                downloadWebFile(decodedUrlString)
+            }
+            progressToast.cancel()
+            if (result != null) {
+                incomingFile = result
+                incomingText = null
+                loadOpenedFile(
+                    opened = result,
+                    context = this@MainActivity,
+                    recentStore = recentStore,
+                    permissionPersisted = false,
+                    onRecentChanged = {},
+                    onLoaded = {}
+                )
+            } else {
+                toast(this@MainActivity, "Download failed or invalid URL")
             }
         }
     }
@@ -2193,3 +2232,53 @@ private val FOLDERSYNC_PACKAGES = listOf(
     "dk.tacit.android.foldersync.full",
     "dk.tacit.android.foldersync.lite",
 )
+
+internal fun extractFilenameFromUrl(urlStr: String): String {
+    val decoded = runCatching { java.net.URLDecoder.decode(urlStr, "UTF-8") }.getOrNull() ?: urlStr
+    val cleanUrl = decoded.substringBefore('?').substringBefore('#')
+    val segment = cleanUrl.substringAfterLast('/')
+    
+    val sanitized = sanitizeFilenameSegment(segment)
+    if (sanitized.isNullOrBlank()) {
+        return "web-capture.md"
+    }
+    
+    val lower = segment.lowercase(Locale.ROOT)
+    return when {
+        lower.endsWith(".json") -> "$sanitized.json"
+        lower.endsWith(".txt") -> "$sanitized.txt"
+        lower.endsWith(".markdown") -> "$sanitized.markdown"
+        else -> "$sanitized.md"
+    }
+}
+
+private fun downloadWebFile(urlStr: String): OpenedFile? {
+    return runCatching {
+        val url = java.net.URL(urlStr)
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = 8000
+        conn.readTimeout = 8000
+        conn.requestMethod = "GET"
+        conn.connect()
+        if (conn.responseCode != java.net.HttpURLConnection.HTTP_OK) {
+            return null
+        }
+        val content = conn.inputStream.use { stream ->
+            stream.readBytes().toString(Charsets.UTF_8)
+        }
+        val filename = extractFilenameFromUrl(urlStr)
+        val kind = when {
+            filename.endsWith(".json", ignoreCase = true) -> FileKind.JSON
+            filename.endsWith(".txt", ignoreCase = true) -> FileKind.TEXT
+            else -> FileKind.MARKDOWN
+        }
+        OpenedFile(
+            uri = urlStr,
+            filename = filename,
+            content = content,
+            reference = urlStr,
+            kind = kind,
+            sourceKey = "web_" + System.currentTimeMillis()
+        )
+    }.getOrNull()
+}
