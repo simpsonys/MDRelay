@@ -37,6 +37,8 @@
 | `check` | 빌드(`build`)와 단위 검증(`test unit`)을 체인 형태로 연속 구동합니다. | `Agent-Safe` | 커밋 전 정밀 검사 용도 |
 | `install` | 빌드된 디버그 APK를 단말에 덮어씁니다. (`adb install -r`) | `Owner-Gated` (명시 승인/지시 필요) | 디바이스 변경 유발 |
 | `run` | 단말의 MDRelay MainActivity를 즉각 구동합니다. | `Owner-Gated` | monkey 및 am start 활용 |
+| `uninstall` | 기존에 연결된 디바이스에서 com.simpsonys.mdrelay 패키지를 완전히 삭제합니다. | `Owner-Gated` | INSTALL_FAILED_UPDATE_INCOMPATIBLE 등의 시그니처 에러 해결 시 유용 |
+| `connect <ip>:<port>` | 지정한 IP 및 포트로 와이어리스 디버깅 디바이스에 연결합니다. | `Owner-Gated` | adb connect 활용 |
 
 ---
 

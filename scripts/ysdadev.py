@@ -66,13 +66,15 @@ def run_cmd(args, shell=False):
 
 def cmd_list():
     print("MDRelay YSDA DevTool - Available commands:")
-    print("  list         Show this list of available commands")
-    print("  doctor       Validate environment dependencies and device connections")
-    print("  build        Assemble the debug APK (assembleDebug)")
-    print("  test unit    Run JUnit unit tests (testDebugUnitTest)")
-    print("  install      Install debug APK to the connected device(s)")
-    print("  run          Launch the app activity on the connected device(s)")
-    print("  check        Run build and unit tests sequentially")
+    print("  list            Show this list of available commands")
+    print("  doctor          Validate environment dependencies and device connections")
+    print("  build           Assemble the debug APK (assembleDebug)")
+    print("  test unit       Run JUnit unit tests (testDebugUnitTest)")
+    print("  install         Install debug APK to the connected device(s)")
+    print("  run             Launch the app activity on the connected device(s)")
+    print("  check           Run build and unit tests sequentially")
+    print("  uninstall       Uninstall the package com.simpsonys.mdrelay from connected device(s)")
+    print("  connect <ip>    Connect to a wireless ADB device (e.g., 192.168.0.5:5555)")
     return True
 
 def cmd_doctor():
@@ -196,6 +198,36 @@ def cmd_check():
     print("==> Check pipeline PASSED successfully.")
     return True
 
+def cmd_uninstall():
+    adb = get_adb()
+    try:
+        res = subprocess.run([adb, "devices"], capture_output=True, text=True)
+        devices = []
+        for line in res.stdout.splitlines()[1:]:
+            if line.strip() and not line.startswith("*"):
+                parts = line.split()
+                if len(parts) >= 2 and parts[1] == "device":
+                    devices.append(parts[0])
+    except Exception:
+        devices = []
+
+    if not devices:
+        print("Error: No online Android devices/emulators detected via ADB.")
+        return False
+
+    success = True
+    for serial in devices:
+        print(f"==> Uninstalling package '{PACKAGE_NAME}' from device: {serial}")
+        ok = run_cmd([adb, "-s", serial, "uninstall", PACKAGE_NAME])
+        if not ok:
+            success = False
+    return success
+
+def cmd_connect(ip_port):
+    adb = get_adb()
+    print(f"==> Connecting to wireless device via ADB: {ip_port}")
+    return run_cmd([adb, "connect", ip_port])
+
 def main():
     args = sys.argv[1:]
     if not args:
@@ -222,6 +254,14 @@ def main():
         success = cmd_run()
     elif verb == "check":
         success = cmd_check()
+    elif verb == "uninstall":
+        success = cmd_uninstall()
+    elif verb == "connect":
+        if len(args) > 1:
+            success = cmd_connect(args[1])
+        else:
+            print("Error: IP and Port are required. Usage: .\\ysdadev.cmd connect <ip>:<port>")
+            success = False
     else:
         print(f"Unknown ysdadev command: '{' '.join(args)}'")
         cmd_list()

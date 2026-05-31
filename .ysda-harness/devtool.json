@@ -44,6 +44,18 @@
       "gated": false,
       "requires_owner_execution": false,
       "command_mapping": "python scripts/ysdadev.py check"
+    },
+    "uninstall": {
+      "description": "Uninstall com.simpsonys.mdrelay from connected device(s)",
+      "gated": true,
+      "requires_owner_execution": true,
+      "command_mapping": "python scripts/ysdadev.py uninstall"
+    },
+    "connect": {
+      "description": "Connect to a wireless debugging device via adb connect",
+      "gated": true,
+      "requires_owner_execution": true,
+      "command_mapping": "python scripts/ysdadev.py connect"
     }
   }
 }
