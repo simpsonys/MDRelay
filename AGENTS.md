@@ -1,4 +1,4 @@
-# MD Relay Agent Instructions
+# MD Relay Agent Instructions (Harness v2.8.5 Aligned)
 
 ## Project Identity
 
@@ -14,6 +14,8 @@ The app is for quick viewing, verification, tiny relay-time edits, and sending c
 
 It is not a note-management app, wiki app, file manager, or full Markdown authoring environment.
 
+---
+
 ## Core Priorities
 
 Prioritize in this order:
@@ -28,6 +30,8 @@ Prioritize in this order:
 8. Markdown readability
 9. Mermaid/code readability
 10. Fold-friendly responsive layout
+
+---
 
 ## Hard Boundaries
 
@@ -50,6 +54,8 @@ Do not add:
 - release automation beyond simple local helper commands
 - Graphify or large architecture documentation
 
+---
+
 ## Allowed Viewer Improvements
 
 The following are allowed because they support viewing and relay:
@@ -70,6 +76,8 @@ The following are allowed because they support viewing and relay:
 - recent opened files
 - compact/Fold responsive layout
 
+---
+
 ## Deferred Features
 
 These are deferred unless explicitly requested later:
@@ -82,6 +90,8 @@ These are deferred unless explicitly requested later:
 - visual Mermaid editing
 - full text search/indexing
 - library management
+
+---
 
 ## Font Policy
 
@@ -98,6 +108,8 @@ Requirements:
 - Avoid WebView for normal Markdown rendering.
 - WebView is allowed only for isolated Mermaid diagram cards if Mermaid rendering is implemented.
 - Do not add custom font files to the APK.
+
+---
 
 ## Agent Working Style
 
@@ -149,3 +161,20 @@ Implementation boundary:
 - Viewer improvements are allowed.
 - Document management features are not allowed.
 - Keep the app as a quick viewer/relay utility.
+
+---
+
+## YSDA Harness v2.8.5 Runtime Instructions
+
+### 1. Daily Workspace Protocol
+* **Core Rule:** 에이전트의 일일 토큰/컨텍스트 및 지연(latency)을 줄이기 위해, 평상시에는 이 `AGENTS.md`와 `workflow/STATUS.md`, 활성 `tasks/` 파일만 읽고 작업합니다. 공통 규격(`harness-common.md` 및 `harness-mode.md`)은 bootstrap 단계 이후에는 반복 로드하지 않습니다.
+* **Korean-First User Language:** 소스코드와 식별자, 명령어 구문 및 상태 토큰(`Proposed`, `Accepted`, `Rejected`, `Blocked`)을 제외한 에이전트 보고 및 대시보드(`workflow/STATUS.md` 등)는 **한국어**로 작성합니다.
+* **Compact Output:** 보고 시 Common §C19 규격에 따라 불필요한 추론과 전체 diff 출력을 최소화하고 `수정 파일 / 현재 상태 / 다음 액션` 포맷을 준수하여 간결하게 요약합니다.
+
+### 2. Architecture & Decision Policy
+* **Decision Gate (Proposed ADR):** 영구 저장 방식 변경, 마이그레이션, 외부 연동(Intent 수신 규칙 변경, FolderSync 연동 규칙 등)을 다룰 때는 반드시 설계 단계에서 `arch/adr-{nnn}.md`를 **Proposed** 상태로 작성해 Owner의 수락(`Accepted`)을 얻은 후 제품 코드를 수정합니다.
+* **External User Data Safety:** 외부 파일 URI 수신 및 FolderSync 가상 인입 시, 사용자 실데이터를 원본 수정/유실 위협으로부터 철저히 고립(Isolate)시킵니다. broad storage permission 획득을 금지하고, 로컬 가상 검증만을 장려합니다.
+
+### 3. Local Façade `ysdadev`
+* **Local-Only:** 전역 `ysdadev` 도구에 의존하지 않고 프로젝트 루트에 구성된 로컬 Façade(`.\ysdadev.cmd` 및 `scripts/ysdadev.py`)만 활용하여 빌드 및 디바이스 배포를 제어합니다.
+* **Commands Gating:** `build`, `test unit`, `list`, `doctor` 등은 에이전트가 단독 수행 가능하지만, 디바이스 설치(`install`), 앱 구동(`run`), 릴리즈 배포 등 단말기에 영향을 미치는 명령은 Owner가 직접 수행하거나 명시적 수락을 득한 후 실행합니다.

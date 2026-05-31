@@ -53,3 +53,14 @@ signing.properties
 # Release output staging
 /dist/
 /release/
+
+# Python / pycache
+__pycache__/
+*.pyc
+
+# YSDA Harness transient files
+.ysda-harness/local/
+.ysda-harness/tmp/
+.ysda-harness/run/
+.ysda-harness/cache/
+

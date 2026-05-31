@@ -1,0 +1,49 @@
+{
+  "devtool_version": "2.8.5",
+  "project_name": "MDRelay",
+  "facade_path": "scripts/ysdadev.py",
+  "commands": {
+    "list": {
+      "description": "Show available commands in local ysdadev Façade",
+      "gated": false,
+      "requires_owner_execution": false,
+      "command_mapping": "python scripts/ysdadev.py list"
+    },
+    "doctor": {
+      "description": "Check pre-requisites (Gradle wrapper, Python path, ADB status, and devices)",
+      "gated": false,
+      "requires_owner_execution": false,
+      "command_mapping": "python scripts/ysdadev.py doctor"
+    },
+    "build": {
+      "description": "Build the debug APK using internal Gradle assembleDebug",
+      "gated": false,
+      "requires_owner_execution": false,
+      "command_mapping": "python scripts/ysdadev.py build"
+    },
+    "test unit": {
+      "description": "Run local JUnit unit tests",
+      "gated": false,
+      "requires_owner_execution": false,
+      "command_mapping": "python scripts/ysdadev.py test unit"
+    },
+    "install": {
+      "description": "Install the built debug APK to all online ADB devices",
+      "gated": true,
+      "requires_owner_execution": true,
+      "command_mapping": "python scripts/ysdadev.py install"
+    },
+    "run": {
+      "description": "Launch MDRelay MainActivity on all online ADB devices",
+      "gated": true,
+      "requires_owner_execution": true,
+      "command_mapping": "python scripts/ysdadev.py run"
+    },
+    "check": {
+      "description": "Run a sequential build and unit test verification",
+      "gated": false,
+      "requires_owner_execution": false,
+      "command_mapping": "python scripts/ysdadev.py check"
+    }
+  }
+}

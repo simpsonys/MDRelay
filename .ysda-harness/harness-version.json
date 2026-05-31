@@ -1,0 +1,14 @@
+{
+  "harness_version": "2.8.5",
+  "applied_mode": "adopt",
+  "applied_date": "2026-05-31",
+  "canonical_root": "D:\\Project\\ysda-harness\\standards",
+  "common_file": ".ysda-harness/harness-common.md",
+  "mode_file": ".ysda-harness/harness-mode.md",
+  "source_common": "standards/ysda-harness-common.md",
+  "source_mode": "standards/ysda-existing-project-harness-adoption-standard.md",
+  "notes": [
+    "Project-local snapshot. Update through harness init/adopt/upgrade, not manual edits.",
+    "Official Windows command is .\\ysdadev.cmd <command>."
+  ]
+}
