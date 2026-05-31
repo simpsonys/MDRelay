@@ -2114,7 +2114,7 @@ private fun buildCaptureFilename(timestamp: ZonedDateTime, titleCandidate: Strin
     }
 }
 
-private fun sanitizeFilenameSegment(value: String?): String? {
+internal fun sanitizeFilenameSegment(value: String?): String? {
     if (value.isNullOrBlank()) return null
     // Strip trailing .md extensions (handles .md, .md.md, etc.) before further processing.
     val withoutMd = value.replace(Regex("""(\.md)+$""", RegexOption.IGNORE_CASE), "")
@@ -2168,7 +2168,7 @@ private fun buildCaptureMarkdown(draft: CaptureDraft, timestamp: ZonedDateTime):
     }.trimEnd()
 }
 
-private fun detectSharedUrl(text: String): String? {
+internal fun detectSharedUrl(text: String): String? {
     val match = Regex("""https?://\S+""").find(text) ?: return null
     return match.value.trimEnd(')', ']', '}', '.', ',')
 }

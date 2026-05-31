@@ -11,6 +11,8 @@
 | ID | 파일 경로 | 상태 | 제목 | 승인일 | 비고 |
 |---|---|---|---|---|---|
 | `ADR-000` | [adr-000-existing-architecture-baseline.md](file:///d:/Project/MDRelay/arch/adr-000-existing-architecture-baseline.md) | `Accepted` | Existing Architecture Baseline | 2026-05-31 | 현존 MDRelay 핵심 아키텍처 및 제약 명시 |
+| `ADR-001` | [adr-001-automatic-ci-and-retention.md](file:///d:/Project/MDRelay/arch/adr-001-automatic-ci-and-retention.md) | `Accepted` | Automatic CI and Artifact Retention | 2026-05-31 | 무서명 디버그 빌드 검증 및 3일 보존 자동화 |
+| `ADR-002` | [adr-002-unit-test-infrastructure.md](file:///d:/Project/MDRelay/arch/adr-002-unit-test-infrastructure.md) | `Accepted` | Unit Test Infrastructure | 2026-05-31 | JUnit 4 테스트 환경 마련 및 가시성 완화 |
 
 ---
 
@@ -26,6 +28,7 @@
 |---|---|---|---|---|
 | `QB-001` | [quality-bar.md](file:///d:/Project/MDRelay/quality/quality-bar.md) | `Active` | MDRelay Quality Bar | Intent 및 SAF, FolderSync 대응 수록 |
 | `TC-001` | [manual-test-checklist.md](file:///d:/Project/MDRelay/qa/manual-test-checklist.md) | `Active` | MDRelay Manual Test Checklist | CLI/adb 및 sample 파일 기반 검증 목록 |
+| `UT-001` | [UtilityTest.kt](file:///d:/Project/MDRelay/app/src/test/java/com/simpsonys/mdrelay/UtilityTest.kt) | `Active` | MainActivity Utility Unit Test | 헬퍼 함수 2개에 대한 JUnit 테스트 케이스 |
 
 ---
 
