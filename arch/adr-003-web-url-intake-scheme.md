@@ -10,7 +10,8 @@
 
 * **추천 사양:** MDRelay 전용 딥링크 스키마인 `mdrelay://web-open?url={encoded_url}`을 지원하고, 백그라운드 코루틴을 통해 해당 URL의 마크다운/JSON/텍스트 내용을 다운로드하여 인메모리 프리뷰에 자동 적재합니다.
 * **추천 이유:** 사용자가 Obsidian, Notion, 혹은 웹 환경에서 마크다운 리소스 Gist 링크를 MDRelay로 유기적으로 보내 열 수 있게 함으로써 릴레이 유틸리티로서의 효용성을 극대화합니다.
-* **Owner Action:** 본 Proposed 설계를 검토하고 승인(`Accepted`) 또는 수정 제안을 제공하여 주십시오. 승인 후에 제품 코드 및 매니페스트 변경이 개시됩니다.
+* **최종 의사결정:** **Owner가 2026-05-31에 "안 1. mdrelay://web-open 스키마 + 네이티브 HttpURLConnection" 도입을 최종 승인(Accepted)함.** (경량화 정책 준수 및 종속성 극소화 목적)
+
 
 ---
 
